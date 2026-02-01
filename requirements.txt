@@ -1,5 +1,6 @@
 genesis-world
-genesis-world
 torch
 torchvision
 ipykernel
+tensorboard
+rsl-rl-lib==2.2.4
