@@ -199,6 +199,7 @@ def run_eval_and_log_video(
     log_dir: Path,
     rl_train_cfg: dict,
     use_wandb: bool,
+    env_overrides: dict | None = None,
     num_eval_envs: int = 9,
     num_eval_episodes: int = 1,
 ):
@@ -225,13 +226,15 @@ def run_eval_and_log_video(
     )
     print(f"Evaluating checkpoint: {last_ckpt.name}")
 
-    # Create eval env with vis camera enabled
+    # Create eval env with vis camera enabled, preserving training env settings
+    eval_overrides = dict(env_overrides or {})
+    eval_overrides["visualize_camera"] = True
     eval_env = make_env(
         task=task,
         num_envs=num_eval_envs,
         action_mode=action_mode,
         show_viewer=False,
-        env_overrides={"visualize_camera": True},
+        env_overrides=eval_overrides,
     )
 
     # Load policy (deep copy config because OnPolicyRunner.pop() mutates it)
@@ -417,6 +420,7 @@ def main():
             log_dir=log_dir,
             rl_train_cfg=rl_train_cfg,
             use_wandb=use_wandb,
+            env_overrides=env_overrides,
         )
 
     # Finish wandb
