@@ -369,6 +369,8 @@ def main():
     env_overrides = {}
     if args.task == "reach":
         env_overrides["reach_target_mode"] = args.reach_target
+    if args.stage == "bc":
+        env_overrides["use_vision_cameras"] = True
 
     # === create env ===
     num_envs = args.num_envs if args.stage == "rl" else 10
