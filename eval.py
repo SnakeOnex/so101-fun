@@ -138,9 +138,13 @@ def main():
         policy = load_bc_policy(env, bc_train_cfg, log_dir)
         policy.eval()
 
-    # Run eval
+    # Run eval (cap at 5s for concise videos)
     obs, _ = env.reset()
-    max_steps = env.max_episode_length
+    eval_duration_s = 5.0
+    max_steps = min(
+        env.max_episode_length,
+        int(eval_duration_s / env.ctrl_dt),
+    )
     total_reward = torch.zeros(args.num_envs, device=gs.device)
 
     video_dir = Path("eval_videos")

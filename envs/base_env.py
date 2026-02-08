@@ -197,7 +197,7 @@ class SO101Manipulator:
 
     @property
     def ee_pose(self) -> torch.Tensor:
-        """End-effector pose (gripper_link): [pos(3), quat(4)] = 7D."""
+        """End-effector pose (gripper fingertip frame): [pos(3), quat(4)] = 7D."""
         pos, quat = self._ee_link.get_pos(), self._ee_link.get_quat()
         return torch.cat([pos, quat], dim=-1)
 
@@ -217,7 +217,7 @@ class SO101Manipulator:
 
 DEFAULT_ROBOT_CFG = {
     "urdf_path": "SO101/so101_new_calib.urdf",
-    "ee_link_name": "gripper_link",
+    "ee_link_name": "gripper_frame_link",
     "jaw_link_name": "moving_jaw_so101_v1_link",
     "default_arm_dof": [0.0, 0.0, 0.0, 0.0, 0.0],
     "default_gripper_dof": [0.0],

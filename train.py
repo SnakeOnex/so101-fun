@@ -242,10 +242,14 @@ def run_eval_and_log_video(
     runner.load(last_ckpt)
     policy = runner.get_inference_policy(device=gs.device)
 
-    # Run eval episodes
+    # Run eval episodes (cap at 5s for concise videos)
     obs, _ = eval_env.reset()
     total_reward = torch.zeros(num_eval_envs, device=gs.device)
-    max_steps = eval_env.max_episode_length
+    eval_duration_s = 5.0
+    max_steps = min(
+        eval_env.max_episode_length,
+        int(eval_duration_s / eval_env.ctrl_dt),
+    )
 
     eval_env.vis_cam.start_recording()
     with torch.no_grad():
