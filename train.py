@@ -196,7 +196,7 @@ def run_eval_and_log_video(
     log_dir: Path,
     rl_train_cfg: dict,
     use_wandb: bool,
-    num_eval_envs: int = 4,
+    num_eval_envs: int = 1,
     num_eval_episodes: int = 1,
 ):
     """
@@ -250,26 +250,38 @@ def run_eval_and_log_video(
     print(f"Eval mean reward: {mean_reward:.4f}")
 
     # Save video
+    # Genesis stop_recording appends _{env_idx} to the filename, so the
+    # actual file for env 0 will be e.g. "reach_joint_delta_eval_0.mp4".
     video_dir = Path("eval_videos")
     video_dir.mkdir(parents=True, exist_ok=True)
-    video_path = video_dir / f"{task}_{action_mode}_eval.mp4"
+    video_base = video_dir / f"{task}_{action_mode}_eval.mp4"
     eval_env.vis_cam.stop_recording(
-        save_to_filename=str(video_path),
+        save_to_filename=str(video_base),
         fps=30,
     )
-    print(f"Eval video saved to {video_path}")
+    # Actual file produced by Genesis (env 0)
+    video_path = video_dir / f"{task}_{action_mode}_eval_0.mp4"
+    if video_path.exists():
+        print(f"Eval video saved to {video_path}")
+    else:
+        # Fallback: maybe Genesis used the exact name we gave
+        video_path = video_base
+        print(f"Eval video saved to {video_path}")
 
     # Upload to wandb
     if use_wandb:
         try:
             import wandb
 
-            if wandb.run is not None:
+            if wandb.run is not None and video_path.exists():
                 wandb.log({
                     "eval/mean_reward": mean_reward,
-                    "eval/video": wandb.Video(str(video_path), fps=30, format="mp4"),
+                    "eval/video": wandb.Video(str(video_path), format="mp4"),
                 })
                 print("Eval video and metrics uploaded to wandb.")
+            elif wandb.run is not None:
+                wandb.log({"eval/mean_reward": mean_reward})
+                print("Eval metrics uploaded (video file not found).")
             else:
                 print("wandb run not active, skipping upload.")
         except ImportError:
