@@ -157,9 +157,6 @@ def get_train_cfg(exp_name: str, max_iterations: int, use_wandb: bool, wandb_pro
                 "state_obs_dim": 7,
                 "hidden_dims": [128, 128, 64],
             },
-            "pose_head": {
-                "hidden_dims": [64, 64],
-            },
         },
         "buffer_size": 1000,
         "log_freq": 10,
@@ -247,11 +244,17 @@ def run_eval_and_log_video(
     total_reward = torch.zeros(num_eval_envs, device=gs.device)
     max_steps = eval_env.max_episode_length
 
+    # Render every Nth step for real-time playback.
+    # Sim at 100Hz, video at 30fps → render every ~3 steps.
+    video_fps = 30
+    render_interval = max(1, round(1.0 / (eval_env.ctrl_dt * video_fps)))
+
     eval_env.vis_cam.start_recording()
     with torch.no_grad():
         for step in range(max_steps):
             actions = policy(obs)
-            eval_env.vis_cam.render()
+            if step % render_interval == 0:
+                eval_env.vis_cam.render()
             obs, rewards, dones, infos = eval_env.step(actions)
             total_reward += rewards
 

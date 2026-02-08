@@ -147,6 +147,11 @@ def main():
     video_dir.mkdir(parents=True, exist_ok=True)
     video_path = video_dir / f"{task}_{action_mode}_{stage}_eval.mp4"
 
+    # Render every Nth step for real-time playback.
+    # Sim at 100Hz, video at 30fps → render every ~3 steps.
+    video_fps = 30
+    render_interval = max(1, round(1.0 / (env.ctrl_dt * video_fps)))
+
     with torch.no_grad():
         if args.record:
             env.vis_cam.start_recording()
@@ -159,7 +164,7 @@ def main():
                 ee_pose = env.robot.ee_pose.float()
                 actions = policy(rgb_obs, ee_pose)
 
-            if args.record:
+            if args.record and step % render_interval == 0:
                 env.vis_cam.render()
 
             obs, rewards, dones, infos = env.step(actions)

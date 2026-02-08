@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class BehaviorCloning:
-    """Multi-task behavior cloning with action prediction and object pose estimation"""
+    """Behavior cloning: distill RL teacher policy into a vision-based student."""
 
     def __init__(self, env, cfg: dict, teacher: nn.Module, device: str = "cpu"):
         self._env = env
@@ -24,13 +24,12 @@ class BehaviorCloning:
         rgb_shape = (6, env.image_height, env.image_width)
         action_dim = env.num_actions
 
-        # Multi-task policy with action and pose heads
         self._policy = Policy(cfg["policy"], action_dim).to(device)
 
         # Initialize optimizer
         self._optimizer = torch.optim.Adam(self._policy.parameters(), lr=cfg["learning_rate"])
 
-        # Experience buffer with pose data
+        # Experience buffer
         self._buffer = ExperienceBuffer(
             num_envs=env.num_envs,
             max_size=self._cfg["buffer_size"],
@@ -58,37 +57,26 @@ class BehaviorCloning:
             end_time = time.time()
             forward_time = end_time - start_time
 
-            # Training steps for both action and pose prediction
+            # Training steps
             total_action_loss = 0.0
-            total_pose_loss = 0.0
             num_batches = 0
 
             start_time = time.time()
             generator = self._buffer.get_batches(self._cfg.get("num_mini_batches", 4), self._cfg["num_epochs"])
             for batch in generator:
-                # Forward pass for both action and pose prediction
+                # Forward pass
                 pred_action = self._policy(batch["rgb_obs"], batch["robot_pose"])
-                pred_left_pose, pred_right_pose = self._policy.predict_pose(batch["rgb_obs"])
 
                 # Compute action prediction loss
                 action_loss = F.mse_loss(pred_action, batch["actions"])
 
-                # Compute pose estimation loss (position + orientation)
-                pose_left_loss = self._compute_pose_loss(pred_left_pose, batch["object_poses"])
-                pose_right_loss = self._compute_pose_loss(pred_right_pose, batch["object_poses"])
-                pose_loss = pose_left_loss + pose_right_loss
-
-                # Combined loss with weights
-                total_loss = action_loss + pose_loss
-
                 # Backward pass
                 self._optimizer.zero_grad()
-                total_loss.backward()
-                self._optimizer.step()
+                action_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self._policy.parameters(), self._cfg["max_grad_norm"])
+                self._optimizer.step()
 
-                total_action_loss += action_loss
-                total_pose_loss += pose_loss
+                total_action_loss += action_loss.item()
                 num_batches += 1
 
             end_time = time.time()
@@ -97,9 +85,7 @@ class BehaviorCloning:
             # Compute average losses
             if num_batches == 0:
                 raise ValueError("No batches collected")
-            else:
-                avg_action_loss = total_action_loss / num_batches
-                avg_pose_loss = total_pose_loss / num_batches
+            avg_action_loss = total_action_loss / num_batches
 
             fps = (self._num_steps_per_env * self._env.num_envs) / (forward_time)
             # Logging
@@ -107,20 +93,15 @@ class BehaviorCloning:
                 current_lr = self._optimizer.param_groups[0]["lr"]
 
                 tf_writer.add_scalar("loss/action_loss", avg_action_loss, it)
-                tf_writer.add_scalar("loss/pose_loss", avg_pose_loss, it)
-                tf_writer.add_scalar("loss/total_loss", avg_action_loss + avg_pose_loss, it)
                 tf_writer.add_scalar("lr", current_lr, it)
                 tf_writer.add_scalar("buffer_size", self._buffer.size, it)
                 tf_writer.add_scalar("speed/forward", forward_time, it)
                 tf_writer.add_scalar("speed/backward", backward_time, it)
                 tf_writer.add_scalar("speed/fps", int(fps), it)
 
-                #
                 print("--------------------------------")
                 info_str = f" | Iteration:     {it + 1:04d}\n"
                 info_str += f" | Action Loss:   {avg_action_loss:.6f}\n"
-                info_str += f" | Pose Loss:     {avg_pose_loss:.6f}\n"
-                info_str += f" | Total Loss:    {avg_action_loss + avg_pose_loss:.6f}\n"
                 info_str += f" | Learning Rate: {current_lr:.6f}\n"
                 info_str += f" | Forward Time:  {forward_time:.2f}s\n"
                 info_str += f" | Backward Time: {backward_time:.2f}s\n"
@@ -136,34 +117,8 @@ class BehaviorCloning:
 
         tf_writer.close()
 
-    def _compute_pose_loss(self, pred_poses: torch.Tensor, target_poses: torch.Tensor) -> torch.Tensor:
-        """Compute pose loss with separate position and orientation components."""
-        # Split into position and orientation
-        pred_pos = pred_poses[:, :3]
-        pred_quat = pred_poses[:, 3:7]
-        target_pos = target_poses[:, :3]
-        target_quat = target_poses[:, 3:7]
-
-        # Position loss (MSE)
-        pos_loss = F.mse_loss(pred_pos, target_pos)
-
-        # Orientation loss (quaternion distance)
-        # Normalize quaternions
-        pred_quat = F.normalize(pred_quat, p=2, dim=1)
-        target_quat = F.normalize(target_quat, p=2, dim=1)
-
-        # Quaternion distance: 1 - |dot(q1, q2)|
-        # Note: we use this as a proxy for the actual distance between two quaternions
-        # because the impact of the orientation loss (auxiliary task) is not significant
-        # compared to the action loss (main task)
-        quat_dot = torch.sum(pred_quat * target_quat, dim=1)
-        quat_loss = torch.mean(1.0 - torch.abs(quat_dot))
-
-        return pos_loss + quat_loss
-
     def _collect_with_rl_teacher(self) -> None:
-        """Collect experience from environment using stereo rgb images and object poses."""
-        # Get state observation
+        """Collect experience from environment using stereo rgb images."""
         obs, _ = self._env.get_observations()
         with torch.inference_mode():
             for _ in range(self._num_steps_per_env):
@@ -173,26 +128,14 @@ class BehaviorCloning:
                 # Get teacher action
                 teacher_action = self._teacher(obs).detach()
 
-                # Get end-effector position
+                # Get end-effector pose
                 ee_pose = self._env.robot.ee_pose
 
-                # Get object pose in camera frame
-                # object_pose_camera = self._get_object_pose_in_camera_frame()
-                object_pose = torch.cat(
-                    [
-                        self._env.object.get_pos(),
-                        self._env.object.get_quat(),
-                    ],
-                    dim=-1,
-                )
-
                 # Store in buffer
-                self._buffer.add(rgb_obs, ee_pose, object_pose, teacher_action)
+                self._buffer.add(rgb_obs, ee_pose, teacher_action)
 
-                # Step environment with student action
+                # Step environment with student action (DAgger)
                 student_action = self._policy(rgb_obs.float(), ee_pose.float())
-
-                # Simple Dagger: use student action if its difference with teacher action is less than 0.5
                 action_diff = torch.norm(student_action - teacher_action, dim=-1)
                 condition = (action_diff < 1.0).unsqueeze(-1).expand_as(student_action)
                 action = torch.where(condition, student_action, teacher_action)
@@ -258,21 +201,18 @@ class ExperienceBuffer:
         # Buffers for data
         self._rgb_obs = torch.empty(max_size, num_envs, *img_shape, dtype=dtype, device=device)
         self._robot_pose = torch.empty(max_size, num_envs, state_dim, dtype=dtype, device=device)
-        self._object_poses = torch.empty(max_size, num_envs, 7, dtype=dtype, device=device)
         self._actions = torch.empty(max_size, num_envs, action_dim, dtype=dtype, device=device)
 
     def add(
         self,
         rgb_obs: torch.Tensor,
         robot_pose: torch.Tensor,
-        object_poses: torch.Tensor,
         actions: torch.Tensor,
     ) -> None:
         """Add experience to buffer."""
         self._ptr = (self._ptr + 1) % self._max_size
         self._rgb_obs[self._ptr] = rgb_obs
         self._robot_pose[self._ptr] = robot_pose
-        self._object_poses[self._ptr] = object_poses
         self._actions[self._ptr] = actions
         self._size = min(self._size + 1, self._max_size)
 
@@ -289,7 +229,6 @@ class ExperienceBuffer:
                 yield {
                     "rgb_obs": self._rgb_obs[batch_indices].reshape(-1, *self._img_shape),
                     "robot_pose": self._robot_pose[batch_indices].reshape(-1, self._state_dim),
-                    "object_poses": self._object_poses[batch_indices].reshape(-1, 7),
                     "actions": self._actions[batch_indices].reshape(-1, self._action_dim),
                 }
 
@@ -297,7 +236,6 @@ class ExperienceBuffer:
         """Clear the buffer."""
         self._rgb_obs.zero_()
         self._robot_pose.zero_()
-        self._object_poses.zero_()
         self._actions.zero_()
         self._ptr = 0
         self._size = 0
@@ -313,7 +251,7 @@ class ExperienceBuffer:
 
 
 class Policy(nn.Module):
-    """Multi-task behavior cloning policy with shared stereo encoder/decoder."""
+    """Behavior cloning policy: stereo images + state -> actions."""
 
     def __init__(self, config: dict, action_dim: int):
         super().__init__()
@@ -340,12 +278,6 @@ class Policy(nn.Module):
             mlp_cfg["input_dim"] = vision_encoder_output_dim
         mlp_cfg["output_dim"] = action_dim
         self.mlp = self._build_mlp(mlp_cfg)
-
-        # MLP for pose prediction
-        pose_mlp_cfg = config["pose_head"]
-        pose_mlp_cfg["input_dim"] = vision_encoder_output_dim
-        pose_mlp_cfg["output_dim"] = 7
-        self.pose_mlp = self._build_mlp(pose_mlp_cfg)
 
     @property
     def dtype(self):
@@ -417,10 +349,3 @@ class Policy(nn.Module):
 
         # Predict actions
         return self.mlp(final_features)
-
-    def predict_pose(self, rgb_obs: torch.Tensor) -> torch.Tensor:
-        """Predict pose from rgb images and state observations."""
-        left_features, right_features = self.get_features(rgb_obs)
-        left_pose = self.pose_mlp(left_features)
-        right_pose = self.pose_mlp(right_features)
-        return left_pose, right_pose
