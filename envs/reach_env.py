@@ -46,7 +46,7 @@ class ReachEnv(SO101BaseEnv):
         """Add a small visual marker sphere for the target (no collision)."""
         self.target_marker = self.scene.add_entity(
             gs.morphs.Sphere(
-                radius=0.015,
+                radius=0.03,
                 fixed=True,
                 collision=False,
             ),
@@ -90,6 +90,10 @@ class ReachEnv(SO101BaseEnv):
         return obs, extras
 
     # ---- Rewards ----
+
+    def _gripper_open_during_task(self) -> bool:
+        """Keep gripper closed for reach -- no grasping needed."""
+        return False
 
     def _reward_reach_target(self) -> torch.Tensor:
         """

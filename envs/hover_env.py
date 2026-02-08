@@ -91,6 +91,10 @@ class HoverEnv(SO101BaseEnv):
 
     # ---- Rewards ----
 
+    def _gripper_open_during_task(self) -> bool:
+        """Keep gripper closed for hover -- no grasping needed."""
+        return False
+
     def _reward_xy_align(self) -> torch.Tensor:
         """Reward for XY alignment: get directly above the object."""
         ee_pos = self.robot.ee_pose[:, :3]

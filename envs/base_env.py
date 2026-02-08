@@ -349,7 +349,7 @@ class SO101BaseEnv:
         if use_vis:
             self.vis_cam = self.scene.add_camera(
                 res=(1280, 960),
-                pos=(3.5, -2.0, 3.5),
+                pos=(2.15, -0.8, 1.75),
                 lookat=(0.8, 0.4, 0.0),
                 fov=60,
                 GUI=False,
