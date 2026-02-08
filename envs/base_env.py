@@ -17,6 +17,39 @@ import torch
 import genesis as gs
 
 
+def _quat_rotate(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """Rotate vector(s) v by quaternion(s) q.
+
+    Args:
+        q: quaternions [B, 4] in (w, x, y, z) convention (Genesis default)
+        v: vectors [3] or [B, 3]
+
+    Returns:
+        Rotated vectors [B, 3]
+    """
+    # Extract components
+    w, x, y, z = q[:, 0:1], q[:, 1:2], q[:, 2:3], q[:, 3:4]
+
+    # Expand v if it's a single vector
+    if v.dim() == 1:
+        v = v.unsqueeze(0).expand(q.shape[0], -1)
+
+    vx, vy, vz = v[:, 0:1], v[:, 1:2], v[:, 2:3]
+
+    # q * v * q^-1 using the standard formula
+    # t = 2 * cross(q_xyz, v)
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+
+    # result = v + w * t + cross(q_xyz, t)
+    rx = vx + w * tx + (y * tz - z * ty)
+    ry = vy + w * ty + (z * tx - x * tz)
+    rz = vz + w * tz + (x * ty - y * tx)
+
+    return torch.cat([rx, ry, rz], dim=-1)
+
+
 class SO101Manipulator:
     """
     SO-101 5-DOF arm + 1-DOF revolute jaw gripper.
@@ -84,6 +117,13 @@ class SO101Manipulator:
 
         self._ee_link = self._robot_entity.get_link(self._args["ee_link_name"])
         self._jaw_link = self._robot_entity.get_link(self._args["jaw_link_name"])
+
+        # Fingertip offset: gripper_frame_link is at this offset from gripper_link
+        # in gripper_link's local frame (from URDF fixed joint).
+        # Genesis merges fixed-joint links, so we compute fingertip pos manually.
+        self._fingertip_local_offset = torch.tensor(
+            [-0.0079, -0.000218121, -0.0981274], device=self._device
+        )
 
         self._default_joint_angles = list(self._args["default_arm_dof"])
         if self._args["default_gripper_dof"] is not None:
@@ -197,9 +237,18 @@ class SO101Manipulator:
 
     @property
     def ee_pose(self) -> torch.Tensor:
-        """End-effector pose (gripper fingertip frame): [pos(3), quat(4)] = 7D."""
-        pos, quat = self._ee_link.get_pos(), self._ee_link.get_quat()
-        return torch.cat([pos, quat], dim=-1)
+        """End-effector pose at fingertip (gripper_frame_link equivalent).
+
+        Genesis merges fixed-joint links, so gripper_frame_link doesn't exist
+        at runtime. We compute the fingertip position by applying the fixed
+        joint offset from the URDF to gripper_link's world pose.
+
+        Returns [pos(3), quat(4)] = 7D, where pos is the fingertip position.
+        """
+        link_pos = self._ee_link.get_pos()    # [B, 3]
+        link_quat = self._ee_link.get_quat()  # [B, 4] (w, x, y, z)
+        fingertip_pos = link_pos + _quat_rotate(link_quat, self._fingertip_local_offset)
+        return torch.cat([fingertip_pos, link_quat], dim=-1)
 
     @property
     def jaw_pose(self) -> torch.Tensor:
@@ -217,7 +266,7 @@ class SO101Manipulator:
 
 DEFAULT_ROBOT_CFG = {
     "urdf_path": "SO101/so101_new_calib.urdf",
-    "ee_link_name": "gripper_frame_link",
+    "ee_link_name": "gripper_link",
     "jaw_link_name": "moving_jaw_so101_v1_link",
     "default_arm_dof": [0.0, 0.0, 0.0, 0.0, 0.0],
     "default_gripper_dof": [0.0],
