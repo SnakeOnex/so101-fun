@@ -29,7 +29,7 @@ class ReachEnv(SO101BaseEnv):
         "num_obs": 8,  # ee_pos - target (3) + arm_qpos (5)
         "num_actions": 5,
         "action_scales": [0.3, 0.3, 0.3, 0.3, 0.3],
-        "episode_length_s": 8.0,
+        "episode_length_s": 3.0,
         "ctrl_dt": 0.01,
         "image_resolution": (64, 64),
         "use_vision_cameras": False,
