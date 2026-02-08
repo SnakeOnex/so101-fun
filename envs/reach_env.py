@@ -67,9 +67,11 @@ class ReachEnv(SO101BaseEnv):
             pos = torch.tensor(fixed, device=self.device).unsqueeze(0).expand(num_reset, -1)
         elif mode == "random":
             # Random target within SO-101's comfortable workspace
-            x = torch.rand(num_reset, device=self.device) * 0.10 + 0.20   # 0.20 ~ 0.30
-            y = (torch.rand(num_reset, device=self.device) - 0.5) * 0.16  # -0.08 ~ 0.08
-            z = torch.rand(num_reset, device=self.device) * 0.12 + 0.08   # 0.08 ~ 0.20
+            # Full workspace: X[-0.24,0.38] Y[-0.34,0.34] Z[-0.07,0.43]
+            # We use a generous subset, avoiding extreme joint configs
+            x = torch.rand(num_reset, device=self.device) * 0.30 + 0.05   # 0.05 ~ 0.35
+            y = (torch.rand(num_reset, device=self.device) - 0.5) * 0.50  # -0.25 ~ 0.25
+            z = torch.rand(num_reset, device=self.device) * 0.25 + 0.05   # 0.05 ~ 0.30
             pos = torch.stack([x, y, z], dim=-1)
         else:
             raise ValueError(f"Unknown reach_target_mode: {mode}")
