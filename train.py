@@ -214,6 +214,26 @@ def _make_camera_grid(frames: list[torch.Tensor], grid_rows: int = 3, grid_cols:
     return grid
 
 
+def _stereo_grid_frames(rgb_obs: torch.Tensor, num_envs: int) -> dict[str, np.ndarray]:
+    """
+    Extract left and right camera views from stereo tensor and compose grid images.
+
+    Args:
+        rgb_obs: [B, 6, H, W] normalized stereo tensor (channels 0-2: left, 3-5: right)
+        num_envs: number of envs to include in grid (max 9 for 3x3)
+
+    Returns:
+        dict with "left" and "right" keys mapping to [grid_H, grid_W, 3] uint8 arrays
+    """
+    grids = {}
+    for name, ch_start in [("left", 0), ("right", 3)]:
+        rgb = rgb_obs[:, ch_start:ch_start + 3]  # [B, 3, H, W]
+        frames_hwc = (rgb.permute(0, 2, 3, 1).clamp(0, 1) * 255).to(torch.uint8)
+        frame_list = [frames_hwc[i] for i in range(min(num_envs, 9))]
+        grids[name] = _make_camera_grid(frame_list)
+    return grids
+
+
 def run_bc_eval_and_log_video(
     task: str,
     action_mode: str,
@@ -224,7 +244,7 @@ def run_bc_eval_and_log_video(
     num_eval_envs: int = 9,
 ):
     """
-    Evaluate a trained BC policy, record debug camera + left camera grid videos, upload to wandb.
+    Evaluate a trained BC policy, record debug camera + stereo camera grid videos, upload to wandb.
     """
     import imageio
 
@@ -272,7 +292,8 @@ def run_bc_eval_and_log_video(
     video_fps = 30
     render_interval = max(1, round(1.0 / (eval_env.ctrl_dt * video_fps)))
 
-    left_cam_grid_frames = []
+    # Collect grid frames for both stereo cameras
+    cam_grid_frames: dict[str, list[np.ndarray]] = {"left": [], "right": []}
 
     eval_env.vis_cam.start_recording()
     with torch.no_grad():
@@ -288,14 +309,10 @@ def run_bc_eval_and_log_video(
             if step % render_interval == 0:
                 eval_env.vis_cam.render()
 
-                # Also capture left camera frames for grid video
-                # rgb_obs is [B, 6, H, W] normalized. Left = first 3 channels.
-                left_rgb = rgb_obs[:, :3]  # [B, 3, H, W]
-                # Convert to [B, H, W, 3] uint8
-                left_frames = (left_rgb.permute(0, 2, 3, 1).clamp(0, 1) * 255).to(torch.uint8)
-                frame_list = [left_frames[i] for i in range(min(num_eval_envs, 9))]
-                grid_frame = _make_camera_grid(frame_list)
-                left_cam_grid_frames.append(grid_frame)
+                # Capture stereo camera grid frames
+                grids = _stereo_grid_frames(rgb_obs, num_eval_envs)
+                for name in cam_grid_frames:
+                    cam_grid_frames[name].append(grids[name])
 
             obs, rewards, dones, infos = eval_env.step(actions)
             total_reward += rewards
@@ -314,11 +331,14 @@ def run_bc_eval_and_log_video(
     if overhead_video_path.exists():
         print(f"BC overhead eval video saved to {overhead_video_path}")
 
-    # Save left camera grid video
-    left_cam_video_path = video_dir / f"{task}_{action_mode}_bc_left_cam.mp4"
-    if left_cam_grid_frames:
-        imageio.mimwrite(str(left_cam_video_path), left_cam_grid_frames, fps=video_fps)
-        print(f"BC left camera grid video saved to {left_cam_video_path}")
+    # Save stereo camera grid videos
+    cam_video_paths: dict[str, Path] = {}
+    for name, frames in cam_grid_frames.items():
+        if frames:
+            path = video_dir / f"{task}_{action_mode}_bc_{name}_cam.mp4"
+            imageio.mimwrite(str(path), frames, fps=video_fps)
+            cam_video_paths[name] = path
+            print(f"BC {name} camera grid video saved to {path}")
 
     # Upload to wandb
     if use_wandb:
@@ -329,8 +349,9 @@ def run_bc_eval_and_log_video(
                 log_data = {"bc_eval/mean_reward": mean_reward}
                 if overhead_video_path.exists():
                     log_data["bc_eval/overhead_video"] = wandb.Video(str(overhead_video_path), format="mp4")
-                if left_cam_video_path.exists():
-                    log_data["bc_eval/left_cam_video"] = wandb.Video(str(left_cam_video_path), format="mp4")
+                for name, path in cam_video_paths.items():
+                    if path.exists():
+                        log_data[f"bc_eval/{name}_cam_video"] = wandb.Video(str(path), format="mp4")
                 wandb.log(log_data)
                 print("BC eval videos and metrics uploaded to wandb.")
             else:

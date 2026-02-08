@@ -65,7 +65,7 @@ class BehaviorCloning:
 
             # Collect experience
             start_time = time.time()
-            self._collect_with_rl_teacher()
+            student_control_frac = self._collect_with_rl_teacher()
             end_time = time.time()
             forward_time = end_time - start_time
 
@@ -110,10 +110,12 @@ class BehaviorCloning:
                 tf_writer.add_scalar("speed/forward", forward_time, it)
                 tf_writer.add_scalar("speed/backward", backward_time, it)
                 tf_writer.add_scalar("speed/fps", int(fps), it)
+                tf_writer.add_scalar("student_control_fraction", student_control_frac, it)
 
                 print("--------------------------------")
                 info_str = f" | Iteration:     {it + 1:04d}\n"
                 info_str += f" | Action Loss:   {avg_action_loss:.6f}\n"
+                info_str += f" | Student Ctrl:  {student_control_frac:.1%}\n"
                 info_str += f" | Learning Rate: {current_lr:.6f}\n"
                 info_str += f" | Forward Time:  {forward_time:.2f}s\n"
                 info_str += f" | Backward Time: {backward_time:.2f}s\n"
@@ -131,6 +133,7 @@ class BehaviorCloning:
                         "bc/lr": current_lr,
                         "bc/buffer_size": self._buffer.size,
                         "bc/fps": int(fps),
+                        "bc/student_control_fraction": student_control_frac,
                     }
                     if len(self._rewbuffer) > 0:
                         log_dict["bc/reward_mean"] = np.mean(self._rewbuffer)
@@ -145,9 +148,15 @@ class BehaviorCloning:
 
         tf_writer.close()
 
-    def _collect_with_rl_teacher(self) -> None:
-        """Collect experience from environment using stereo rgb images."""
+    def _collect_with_rl_teacher(self) -> float:
+        """Collect experience from environment using stereo rgb images.
+
+        Returns:
+            student_control_fraction: fraction of steps where the student's action was used.
+        """
         obs, _ = self._env.get_observations()
+        total_steps = 0
+        student_steps = 0
         with torch.inference_mode():
             for _ in range(self._num_steps_per_env):
                 # Get stereo rgb images
@@ -165,8 +174,13 @@ class BehaviorCloning:
                 # Step environment with student action (DAgger)
                 student_action = self._policy(rgb_obs.float(), ee_pose.float())
                 action_diff = torch.norm(student_action - teacher_action, dim=-1)
-                condition = (action_diff < 1.0).unsqueeze(-1).expand_as(student_action)
+                student_mask = action_diff < 1.0
+                condition = student_mask.unsqueeze(-1).expand_as(student_action)
                 action = torch.where(condition, student_action, teacher_action)
+
+                # Track student control fraction
+                total_steps += student_mask.numel()
+                student_steps += student_mask.sum().item()
 
                 next_obs, reward, done, _ = self._env.step(action)
                 self._cur_reward_sum += reward
@@ -175,6 +189,8 @@ class BehaviorCloning:
                 new_ids = (done > 0).nonzero(as_tuple=False)
                 self._rewbuffer.extend(self._cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
                 self._cur_reward_sum[new_ids] = 0
+
+        return student_steps / total_steps if total_steps > 0 else 0.0
 
     def save(self, path: str) -> None:
         """Save model checkpoint."""
