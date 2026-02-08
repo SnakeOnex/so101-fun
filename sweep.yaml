@@ -1,0 +1,55 @@
+# wandb sweep configuration for SO-101 reward tuning
+#
+# Usage:
+#   wandb sweep sweep.yaml
+#   wandb agent <sweep_id>
+#
+# The sweep agent will run train.py with different reward scale combinations
+# and report the mean reward to wandb for comparison.
+
+program: train.py
+method: random
+metric:
+  name: Train/mean_reward
+  goal: maximize
+
+parameters:
+  # Task to sweep over (usually fix this for a given sweep)
+  task:
+    value: grasp
+
+  action_mode:
+    value: joint_delta
+
+  num_envs:
+    value: 2048
+
+  max_iterations:
+    value: 300
+
+  # Reward scales to search over
+  reward_overrides:
+    values:
+      - '{"xy_align": 0.5, "hover_height": 0.5, "gripper_pointing_down": 0.25, "reach_from_above": 0.25, "action_penalty": 0.01}'
+      - '{"xy_align": 1.0, "hover_height": 1.0, "gripper_pointing_down": 0.5, "reach_from_above": 0.5, "action_penalty": 0.01}'
+      - '{"xy_align": 2.0, "hover_height": 1.0, "gripper_pointing_down": 0.5, "reach_from_above": 0.5, "action_penalty": 0.01}'
+      - '{"xy_align": 1.0, "hover_height": 2.0, "gripper_pointing_down": 0.5, "reach_from_above": 0.5, "action_penalty": 0.01}'
+      - '{"xy_align": 1.0, "hover_height": 1.0, "gripper_pointing_down": 1.0, "reach_from_above": 1.0, "action_penalty": 0.01}'
+      - '{"xy_align": 2.0, "hover_height": 2.0, "gripper_pointing_down": 0.5, "reach_from_above": 0.5, "action_penalty": 0.005}'
+      - '{"xy_align": 1.0, "hover_height": 1.0, "gripper_pointing_down": 0.0, "reach_from_above": 1.0, "action_penalty": 0.01}'
+      - '{"xy_align": 2.0, "hover_height": 1.0, "gripper_pointing_down": 0.25, "reach_from_above": 1.0, "action_penalty": 0.05}'
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - --task
+  - ${task}
+  - --action_mode
+  - ${action_mode}
+  - -B
+  - ${num_envs}
+  - --max_iterations
+  - ${max_iterations}
+  - --reward_overrides
+  - ${reward_overrides}

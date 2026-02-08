@@ -3,4 +3,5 @@ torch
 torchvision
 ipykernel
 tensorboard
+wandb
 rsl-rl-lib==2.2.4
