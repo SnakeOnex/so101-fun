@@ -29,6 +29,7 @@ Usage:
 """
 
 import argparse
+import copy
 import os
 import pickle
 import re
@@ -227,8 +228,8 @@ def run_eval_and_log_video(
         env_overrides={"visualize_camera": True},
     )
 
-    # Load policy
-    runner = OnPolicyRunner(eval_env, rl_train_cfg, str(log_dir), device=gs.device)
+    # Load policy (deep copy config because OnPolicyRunner.pop() mutates it)
+    runner = OnPolicyRunner(eval_env, copy.deepcopy(rl_train_cfg), str(log_dir), device=gs.device)
     runner.load(last_ckpt)
     policy = runner.get_inference_policy(device=gs.device)
 
@@ -389,7 +390,7 @@ def main():
         runner = BehaviorCloning(env, bc_train_cfg, teacher_policy, device=gs.device)
         runner.learn(num_learning_iterations=args.max_iterations, log_dir=str(log_dir))
     else:
-        runner = OnPolicyRunner(env, rl_train_cfg, str(log_dir), device=gs.device)
+        runner = OnPolicyRunner(env, copy.deepcopy(rl_train_cfg), str(log_dir), device=gs.device)
         runner.learn(
             num_learning_iterations=args.max_iterations, init_at_random_ep_len=True
         )
