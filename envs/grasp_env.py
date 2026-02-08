@@ -31,7 +31,7 @@ class GraspEnv(SO101BaseEnv):
         "num_envs": 10,
         "num_obs": 19,
         "num_actions": 5,
-        "action_scales": [0.1, 0.1, 0.1, 0.1, 0.1],
+        "action_scales": [0.3, 0.3, 0.3, 0.3, 0.3],
         "episode_length_s": 4.0,
         "ctrl_dt": 0.01,
         "image_resolution": (64, 64),

@@ -59,7 +59,7 @@ def make_env(
     # Action mode affects num_actions and action_scales
     if action_mode == "joint_delta":
         env_cfg["num_actions"] = 5
-        env_cfg["action_scales"] = [0.1, 0.1, 0.1, 0.1, 0.1]
+        env_cfg["action_scales"] = [0.3, 0.3, 0.3, 0.3, 0.3]
     elif action_mode == "ee_delta_pos":
         env_cfg["num_actions"] = 3
         env_cfg["action_scales"] = [0.03, 0.03, 0.03]
