@@ -30,7 +30,7 @@ class HoverEnv(SO101BaseEnv):
         "episode_length_s": 4.0,
         "ctrl_dt": 0.01,
         "image_resolution": (64, 64),
-        "use_rasterizer": True,
+        "use_vision_cameras": False,
         "visualize_camera": False,
         # Object config
         "box_size": [0.04, 0.02, 0.03],

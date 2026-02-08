@@ -250,7 +250,9 @@ class SO101BaseEnv:
         "episode_length_s": 4.0,
         "ctrl_dt": 0.01,
         "image_resolution": (64, 64),
-        "use_rasterizer": True,
+        # Whether to add stereo vision cameras + BatchRenderer (needed for BC
+        # stage 2).  Off by default for fast state-based RL iteration.
+        "use_vision_cameras": False,
         "visualize_camera": False,
     }
     DEFAULT_REWARD_SCALES: dict = {}
@@ -283,6 +285,25 @@ class SO101BaseEnv:
         self.cfg = env_cfg
 
         # == setup scene ==
+        use_vis = env_cfg.get("visualize_camera", False)
+        use_vision = env_cfg.get("use_vision_cameras", False)
+
+        # Lighting: multiple directional lights for even illumination
+        lights = [
+            {"type": "directional", "dir": (-1, -1, -1), "color": (1.0, 1.0, 1.0), "intensity": 5.0},
+            {"type": "directional", "dir": (1, -0.5, -1), "color": (0.9, 0.9, 1.0), "intensity": 3.0},
+            {"type": "directional", "dir": (0, 1, -0.5), "color": (1.0, 1.0, 0.9), "intensity": 2.0},
+        ]
+
+        # Only use BatchRenderer when vision cameras are needed (BC stage).
+        # For state-based RL training this avoids Madrona overhead entirely.
+        renderer = None
+        if use_vision:
+            renderer = gs.options.renderers.BatchRenderer(use_rasterizer=True)
+
+        # For eval grid: show up to 9 envs (3x3)
+        n_rendered = min(9 if use_vis else 10, env_cfg["num_envs"])
+
         self.scene = gs.Scene(
             sim_options=gs.options.SimOptions(dt=self.ctrl_dt, substeps=2),
             rigid_options=gs.options.RigidOptions(
@@ -292,7 +313,9 @@ class SO101BaseEnv:
                 enable_joint_limit=True,
             ),
             vis_options=gs.options.VisOptions(
-                rendered_envs_idx=list(range(min(10, env_cfg["num_envs"])))
+                rendered_envs_idx=list(range(n_rendered)),
+                ambient_light=(0.4, 0.4, 0.4),
+                lights=lights,
             ),
             viewer_options=gs.options.ViewerOptions(
                 max_FPS=int(0.5 / self.ctrl_dt),
@@ -301,9 +324,7 @@ class SO101BaseEnv:
                 camera_fov=50,
             ),
             profiling_options=gs.options.ProfilingOptions(show_FPS=False),
-            renderer=gs.options.renderers.BatchRenderer(
-                use_rasterizer=env_cfg["use_rasterizer"],
-            ),
+            renderer=renderer,
             show_viewer=show_viewer,
         )
 
@@ -322,41 +343,42 @@ class SO101BaseEnv:
         self._setup_task()
 
         # == cameras ==
-        # NOTE: Genesis BatchRenderer requires ALL cameras to share the same
-        # resolution.  When visualize_camera is enabled (eval mode) we use the
-        # vis_cam resolution for every camera so we get higher-quality video
-        # without a resolution conflict.
-        use_vis = self.env_cfg.get("visualize_camera", False)
-        cam_res = (256, 256) if use_vis else (self.image_width, self.image_height)
-
+        # Eval vis camera: debug=True uses Rasterizer (viewer-quality), produces
+        # single video file, can have any resolution independent of BatchRenderer.
+        # Pulled back to see the 3x3 grid of envs.
         if use_vis:
             self.vis_cam = self.scene.add_camera(
-                res=cam_res,
-                pos=(0.5, -0.3, 0.4),
-                lookat=(0.15, 0.0, 0.1),
+                res=(1280, 960),
+                pos=(3.5, -2.0, 3.5),
+                lookat=(0.8, 0.4, 0.0),
+                fov=60,
+                GUI=False,
+                debug=True,  # uses Rasterizer, not BatchRenderer
+            )
+
+        # Stereo vision cameras: only when needed (BC stage 2).
+        # These use BatchRenderer and require it to be enabled.
+        if use_vision:
+            self.left_cam = self.scene.add_camera(
+                res=(self.image_width, self.image_height),
+                pos=(0.5, 0.15, 0.25),
+                lookat=(0.15, 0.0, 0.05),
                 fov=50,
                 GUI=False,
             )
-
-        self.left_cam = self.scene.add_camera(
-            res=cam_res,
-            pos=(0.5, 0.15, 0.25),
-            lookat=(0.15, 0.0, 0.05),
-            fov=50,
-            GUI=False,
-        )
-        self.right_cam = self.scene.add_camera(
-            res=cam_res,
-            pos=(0.5, -0.15, 0.25),
-            lookat=(0.15, 0.0, 0.05),
-            fov=50,
-            GUI=False,
-        )
+            self.right_cam = self.scene.add_camera(
+                res=(self.image_width, self.image_height),
+                pos=(0.5, -0.15, 0.25),
+                lookat=(0.15, 0.0, 0.05),
+                fov=50,
+                GUI=False,
+            )
 
         # == build scene ==
         self.scene.build(
             n_envs=env_cfg["num_envs"],
             env_spacing=(0.8, 0.8),
+            n_envs_per_row=3,
         )
         self.robot.set_pd_gains()
 
@@ -482,6 +504,10 @@ class SO101BaseEnv:
 
     def get_stereo_rgb_images(self, normalize: bool = True) -> torch.Tensor:
         """Render stereo RGB images from left and right cameras."""
+        if not hasattr(self, "left_cam"):
+            raise RuntimeError(
+                "Stereo cameras not available. Set use_vision_cameras=True in env_cfg."
+            )
         rgb_left, _, _, _ = self.left_cam.render(
             rgb=True, depth=False, segmentation=False, normal=False
         )

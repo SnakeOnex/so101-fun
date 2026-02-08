@@ -196,7 +196,7 @@ def run_eval_and_log_video(
     log_dir: Path,
     rl_train_cfg: dict,
     use_wandb: bool,
-    num_eval_envs: int = 1,
+    num_eval_envs: int = 9,
     num_eval_episodes: int = 1,
 ):
     """
@@ -250,23 +250,19 @@ def run_eval_and_log_video(
     print(f"Eval mean reward: {mean_reward:.4f}")
 
     # Save video
-    # Genesis stop_recording appends _{env_idx} to the filename, so the
-    # actual file for env 0 will be e.g. "reach_joint_delta_eval_0.mp4".
+    # debug=True camera uses Rasterizer and produces a single video file
+    # at the exact path we specify (no per-env _0 suffix).
     video_dir = Path("eval_videos")
     video_dir.mkdir(parents=True, exist_ok=True)
-    video_base = video_dir / f"{task}_{action_mode}_eval.mp4"
+    video_path = video_dir / f"{task}_{action_mode}_eval.mp4"
     eval_env.vis_cam.stop_recording(
-        save_to_filename=str(video_base),
+        save_to_filename=str(video_path),
         fps=30,
     )
-    # Actual file produced by Genesis (env 0)
-    video_path = video_dir / f"{task}_{action_mode}_eval_0.mp4"
     if video_path.exists():
         print(f"Eval video saved to {video_path}")
     else:
-        # Fallback: maybe Genesis used the exact name we gave
-        video_path = video_base
-        print(f"Eval video saved to {video_path}")
+        print(f"Warning: expected video at {video_path} but file not found.")
 
     # Upload to wandb
     if use_wandb:

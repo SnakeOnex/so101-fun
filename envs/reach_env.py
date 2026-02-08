@@ -31,7 +31,7 @@ class ReachEnv(SO101BaseEnv):
         "episode_length_s": 4.0,
         "ctrl_dt": 0.01,
         "image_resolution": (64, 64),
-        "use_rasterizer": True,
+        "use_vision_cameras": False,
         "visualize_camera": False,
         # Reach-specific
         "reach_target_mode": "fixed",  # "fixed" or "random"

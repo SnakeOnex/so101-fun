@@ -78,7 +78,7 @@ def main():
     )
     parser.add_argument("--record", action="store_true", help="Record evaluation video")
     parser.add_argument("--wandb", action="store_true", help="Upload video to wandb")
-    parser.add_argument("--num_envs", type=int, default=4, help="Number of eval envs")
+    parser.add_argument("--num_envs", type=int, default=9, help="Number of eval envs (default 9 for 3x3 grid)")
     args = parser.parse_args()
 
     torch.set_default_dtype(torch.float32)
@@ -111,6 +111,10 @@ def main():
     # Eval overrides
     env_cfg["num_envs"] = args.num_envs
     env_cfg["visualize_camera"] = args.record
+
+    # BC stage needs stereo vision cameras for inference
+    if stage == "bc":
+        env_cfg["use_vision_cameras"] = True
 
     # Create env using the task registry
     env_cls = TASK_REGISTRY[task]
@@ -173,7 +177,7 @@ def main():
             wandb.init(project="so101-rl", job_type="eval")
             wandb.log({
                 "eval/mean_reward": mean_reward,
-                "eval/video": wandb.Video(str(video_path), fps=30, format="mp4"),
+                "eval/video": wandb.Video(str(video_path), format="mp4"),
                 "eval/task": task,
                 "eval/action_mode": action_mode,
                 "eval/stage": stage,
