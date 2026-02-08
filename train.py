@@ -242,20 +242,26 @@ def run_eval_and_log_video(
     runner.load(last_ckpt)
     policy = runner.get_inference_policy(device=gs.device)
 
-    # Run eval episodes (cap at 5s for concise videos)
+    # Run eval episodes (cap at 4s for concise videos)
     obs, _ = eval_env.reset()
     total_reward = torch.zeros(num_eval_envs, device=gs.device)
-    eval_duration_s = 5.0
+    eval_duration_s = 4.0
     max_steps = min(
         eval_env.max_episode_length,
         int(eval_duration_s / eval_env.ctrl_dt),
     )
 
+    # Render every Nth step so video duration matches sim duration.
+    # Sim at 100Hz, video at 30fps → render every ~3 steps.
+    video_fps = 30
+    render_interval = max(1, round(1.0 / (eval_env.ctrl_dt * video_fps)))
+
     eval_env.vis_cam.start_recording()
     with torch.no_grad():
         for step in range(max_steps):
             actions = policy(obs)
-            eval_env.vis_cam.render()
+            if step % render_interval == 0:
+                eval_env.vis_cam.render()
             obs, rewards, dones, infos = eval_env.step(actions)
             total_reward += rewards
 

@@ -138,14 +138,19 @@ def main():
         policy = load_bc_policy(env, bc_train_cfg, log_dir)
         policy.eval()
 
-    # Run eval (cap at 5s for concise videos)
+    # Run eval (cap at 4s for concise videos)
     obs, _ = env.reset()
-    eval_duration_s = 5.0
+    eval_duration_s = 4.0
     max_steps = min(
         env.max_episode_length,
         int(eval_duration_s / env.ctrl_dt),
     )
     total_reward = torch.zeros(args.num_envs, device=gs.device)
+
+    # Render every Nth step so video duration matches sim duration.
+    # Sim at 100Hz, video at 30fps → render every ~3 steps.
+    video_fps = 30
+    render_interval = max(1, round(1.0 / (env.ctrl_dt * video_fps)))
 
     video_dir = Path("eval_videos")
     video_dir.mkdir(parents=True, exist_ok=True)
@@ -163,7 +168,7 @@ def main():
                 ee_pose = env.robot.ee_pose.float()
                 actions = policy(rgb_obs, ee_pose)
 
-            if args.record:
+            if args.record and step % render_interval == 0:
                 env.vis_cam.render()
 
             obs, rewards, dones, infos = env.step(actions)

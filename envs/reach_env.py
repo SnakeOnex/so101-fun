@@ -11,8 +11,9 @@ Supports two modes (via env_cfg["reach_target_mode"]):
 Observation (8D):
   ee_pos - target_pos (3) + arm_qpos (5)
 
-Reward:
-  reach_target: exponential decay on distance to target
+Rewards:
+  reach_target:      exponential decay on distance to target (fingertip)
+  overshoot_penalty:  penalize gripper body going inside/past the target
 """
 
 import torch
@@ -40,6 +41,7 @@ class ReachEnv(SO101BaseEnv):
 
     DEFAULT_REWARD_SCALES = {
         "reach_target": 1.0,
+        "overshoot_penalty": 0.5,
     }
 
     def _setup_task(self) -> None:
@@ -105,3 +107,26 @@ class ReachEnv(SO101BaseEnv):
         ee_pos = self.robot.ee_pose[:, :3]
         dist = torch.norm(ee_pos - self.target_pos, p=2, dim=-1)
         return torch.exp(-20.0 * dist)
+
+    def _reward_overshoot_penalty(self) -> torch.Tensor:
+        """
+        Penalize the gripper body going past/inside the target.
+
+        The fingertip (ee_pose) is ~9.8cm ahead of the gripper motor
+        (gripper_link). If the motor gets closer to the target than the
+        fingertip, it means the gripper has rammed through the target.
+
+        penalty = -max(0, fingertip_dist - motor_dist)
+
+        This is 0 when approaching correctly (motor far, fingertip close)
+        and negative when overshooting (motor closer than fingertip).
+        """
+        ee_pos = self.robot.ee_pose[:, :3]       # fingertip position
+        motor_pos = self.robot._ee_link.get_pos()  # gripper_link (motor)
+
+        fingertip_dist = torch.norm(ee_pos - self.target_pos, p=2, dim=-1)
+        motor_dist = torch.norm(motor_pos - self.target_pos, p=2, dim=-1)
+
+        # Overshoot: fingertip is further from target than the motor
+        overshoot = torch.clamp(fingertip_dist - motor_dist, min=0.0)
+        return -overshoot
