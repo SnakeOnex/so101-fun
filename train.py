@@ -177,7 +177,10 @@ def load_teacher_policy(env, rl_train_cfg, log_dir):
         f for f in log_dir.iterdir() if re.match(r"model_\d+\.pt", f.name)
     ]
     try:
-        *_, last_ckpt = sorted(checkpoint_files)
+        *_, last_ckpt = sorted(
+            checkpoint_files,
+            key=lambda f: int(re.search(r"model_(\d+)", f.name).group(1)),
+        )
     except ValueError as e:
         raise FileNotFoundError(f"No checkpoint files found in {log_dir}") from e
     runner = OnPolicyRunner(env, rl_train_cfg, str(log_dir), device=gs.device)
@@ -216,7 +219,10 @@ def run_eval_and_log_video(
     if not checkpoint_files:
         print("No checkpoints found, skipping eval.")
         return
-    *_, last_ckpt = sorted(checkpoint_files)
+    *_, last_ckpt = sorted(
+        checkpoint_files,
+        key=lambda f: int(re.search(r"model_(\d+)", f.name).group(1)),
+    )
     print(f"Evaluating checkpoint: {last_ckpt.name}")
 
     # Create eval env with vis camera enabled

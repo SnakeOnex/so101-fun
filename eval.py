@@ -50,7 +50,10 @@ def load_rl_policy(env, train_cfg, log_dir):
     ]
     if not checkpoint_files:
         raise FileNotFoundError(f"No checkpoint files found in {log_dir}")
-    *_, last_ckpt = sorted(checkpoint_files)
+    *_, last_ckpt = sorted(
+        checkpoint_files,
+        key=lambda f: int(re.search(r"model_(\d+)", f.name).group(1)),
+    )
     runner.load(last_ckpt)
     print(f"Loaded RL checkpoint: {last_ckpt.name}")
     return runner.get_inference_policy(device=gs.device)
@@ -64,7 +67,10 @@ def load_bc_policy(env, bc_cfg, log_dir):
     ]
     if not checkpoint_files:
         raise FileNotFoundError(f"No checkpoint files found in {log_dir}")
-    *_, last_ckpt = sorted(checkpoint_files)
+    *_, last_ckpt = sorted(
+        checkpoint_files,
+        key=lambda f: int(re.search(r"checkpoint_(\d+)", f.name).group(1)),
+    )
     bc_runner.load(last_ckpt)
     print(f"Loaded BC checkpoint: {last_ckpt.name}")
     return bc_runner._policy
