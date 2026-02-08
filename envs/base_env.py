@@ -322,9 +322,16 @@ class SO101BaseEnv:
         self._setup_task()
 
         # == cameras ==
-        if self.env_cfg.get("visualize_camera", False):
+        # NOTE: Genesis BatchRenderer requires ALL cameras to share the same
+        # resolution.  When visualize_camera is enabled (eval mode) we use the
+        # vis_cam resolution for every camera so we get higher-quality video
+        # without a resolution conflict.
+        use_vis = self.env_cfg.get("visualize_camera", False)
+        cam_res = (256, 256) if use_vis else (self.image_width, self.image_height)
+
+        if use_vis:
             self.vis_cam = self.scene.add_camera(
-                res=(256, 256),
+                res=cam_res,
                 pos=(0.5, -0.3, 0.4),
                 lookat=(0.15, 0.0, 0.1),
                 fov=50,
@@ -332,14 +339,14 @@ class SO101BaseEnv:
             )
 
         self.left_cam = self.scene.add_camera(
-            res=(self.image_width, self.image_height),
+            res=cam_res,
             pos=(0.5, 0.15, 0.25),
             lookat=(0.15, 0.0, 0.05),
             fov=50,
             GUI=False,
         )
         self.right_cam = self.scene.add_camera(
-            res=(self.image_width, self.image_height),
+            res=cam_res,
             pos=(0.5, -0.15, 0.25),
             lookat=(0.15, 0.0, 0.05),
             fov=50,
