@@ -13,12 +13,14 @@ from torch.utils.tensorboard import SummaryWriter
 class BehaviorCloning:
     """Behavior cloning: distill RL teacher policy into a vision-based student."""
 
-    def __init__(self, env, cfg: dict, teacher: nn.Module, device: str = "cpu"):
+    def __init__(self, env, cfg: dict, teacher: nn.Module, device: str = "cpu", use_wandb: bool = False, wandb_project: str = "so101-bc"):
         self._env = env
         self._cfg = cfg
         self._device = device
         self._teacher = teacher
         self._num_steps_per_env = cfg["num_steps_per_env"]
+        self._use_wandb = use_wandb
+        self._wandb_project = wandb_project
 
         # Stereo rgb: 6 channels (3 left + 3 right)
         rgb_shape = (6, env.image_height, env.image_width)
@@ -50,7 +52,17 @@ class BehaviorCloning:
 
         tf_writer = SummaryWriter(log_dir)
 
+        # Init wandb
+        if self._use_wandb:
+            try:
+                import wandb
+                wandb.init(project=self._wandb_project, config=self._cfg)
+            except ImportError:
+                self._use_wandb = False
+
         for it in range(num_learning_iterations):
+            self._current_iter = it + 1
+
             # Collect experience
             start_time = time.time()
             self._collect_with_rl_teacher()
@@ -111,9 +123,25 @@ class BehaviorCloning:
                 if len(self._rewbuffer) > 0:
                     tf_writer.add_scalar("reward/mean", np.mean(self._rewbuffer), it)
 
+                # wandb logging
+                if self._use_wandb:
+                    import wandb
+                    log_dict = {
+                        "bc/action_loss": avg_action_loss,
+                        "bc/lr": current_lr,
+                        "bc/buffer_size": self._buffer.size,
+                        "bc/fps": int(fps),
+                    }
+                    if len(self._rewbuffer) > 0:
+                        log_dict["bc/reward_mean"] = np.mean(self._rewbuffer)
+                    wandb.log(log_dict, step=it)
+
             # Save checkpoints periodically
             if (it + 1) % self._cfg["save_freq"] == 0:
                 self.save(os.path.join(log_dir, f"checkpoint_{it + 1:04d}.pt"))
+
+        # Save final checkpoint
+        self.save(os.path.join(log_dir, f"checkpoint_{num_learning_iterations:04d}.pt"))
 
         tf_writer.close()
 
@@ -164,7 +192,7 @@ class BehaviorCloning:
         checkpoint = torch.load(path, map_location=self._device, weights_only=False)
         self._policy.load_state_dict(checkpoint["model_state_dict"])
         self._optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        self.current_iter = checkpoint["current_iter"]
+        self._current_iter = checkpoint["current_iter"]
         print(f"Model loaded from {path}")
 
     def load_finetuned_model(self, path: str) -> None:

@@ -37,6 +37,9 @@ import tempfile
 from importlib import metadata
 from pathlib import Path
 
+import numpy as np
+import torch
+
 try:
     try:
         if metadata.version("rsl-rl"):
@@ -190,6 +193,152 @@ def load_teacher_policy(env, rl_train_cfg, log_dir):
 # Post-training evaluation + video upload
 # ---------------------------------------------------------------------------
 
+def _make_camera_grid(frames: list[torch.Tensor], grid_rows: int = 3, grid_cols: int = 3) -> np.ndarray:
+    """
+    Compose per-env camera frames into a grid image.
+
+    Args:
+        frames: list of [H, W, 3] uint8 tensors, one per env
+        grid_rows, grid_cols: grid layout
+
+    Returns:
+        [grid_H, grid_W, 3] uint8 numpy array
+    """
+    n = min(len(frames), grid_rows * grid_cols)
+    h, w = frames[0].shape[:2]
+    grid = np.zeros((grid_rows * h, grid_cols * w, 3), dtype=np.uint8)
+    for i in range(n):
+        r, c = divmod(i, grid_cols)
+        img = frames[i].cpu().numpy() if isinstance(frames[i], torch.Tensor) else frames[i]
+        grid[r * h:(r + 1) * h, c * w:(c + 1) * w] = img
+    return grid
+
+
+def run_bc_eval_and_log_video(
+    task: str,
+    action_mode: str,
+    log_dir: Path,
+    bc_train_cfg: dict,
+    use_wandb: bool,
+    env_overrides: dict | None = None,
+    num_eval_envs: int = 9,
+):
+    """
+    Evaluate a trained BC policy, record debug camera + left camera grid videos, upload to wandb.
+    """
+    import imageio
+
+    print("\n" + "=" * 60)
+    print("BC Post-training evaluation")
+    print("=" * 60)
+
+    # Find latest BC checkpoint (checkpoint_NNNN.pt)
+    checkpoint_files = [
+        f for f in log_dir.iterdir() if re.match(r"checkpoint_\d+\.pt", f.name)
+    ]
+    if not checkpoint_files:
+        print("No BC checkpoints found, skipping eval.")
+        return
+    *_, last_ckpt = sorted(
+        checkpoint_files,
+        key=lambda f: int(re.search(r"checkpoint_(\d+)", f.name).group(1)),
+    )
+    print(f"Evaluating BC checkpoint: {last_ckpt.name}")
+
+    # Create eval env: needs BOTH debug camera (overhead) and vision cameras (stereo)
+    eval_overrides = dict(env_overrides or {})
+    eval_overrides["visualize_camera"] = True
+    eval_overrides["use_vision_cameras"] = True
+    eval_env = make_env(
+        task=task,
+        num_envs=num_eval_envs,
+        action_mode=action_mode,
+        show_viewer=False,
+        env_overrides=eval_overrides,
+    )
+
+    # Load BC policy from checkpoint
+    from so101_behavior_cloning import Policy
+    checkpoint = torch.load(last_ckpt, map_location=gs.device, weights_only=False)
+    policy = Policy(bc_train_cfg["policy"], eval_env.num_actions).to(gs.device)
+    policy.load_state_dict(checkpoint["model_state_dict"])
+    policy.eval()
+
+    # Run eval episode
+    obs, _ = eval_env.reset()
+    total_reward = torch.zeros(num_eval_envs, device=gs.device)
+    max_steps = eval_env.max_episode_length
+
+    video_fps = 30
+    render_interval = max(1, round(1.0 / (eval_env.ctrl_dt * video_fps)))
+
+    left_cam_grid_frames = []
+
+    eval_env.vis_cam.start_recording()
+    with torch.no_grad():
+        for step in range(max_steps):
+            # Get stereo images and ee_pose for BC policy
+            rgb_obs = eval_env.get_stereo_rgb_images(normalize=True)
+            ee_pose = eval_env.robot.ee_pose
+
+            # BC forward pass
+            actions = policy(rgb_obs.float(), ee_pose.float())
+
+            # Render debug camera for overhead video
+            if step % render_interval == 0:
+                eval_env.vis_cam.render()
+
+                # Also capture left camera frames for grid video
+                # rgb_obs is [B, 6, H, W] normalized. Left = first 3 channels.
+                left_rgb = rgb_obs[:, :3]  # [B, 3, H, W]
+                # Convert to [B, H, W, 3] uint8
+                left_frames = (left_rgb.permute(0, 2, 3, 1).clamp(0, 1) * 255).to(torch.uint8)
+                frame_list = [left_frames[i] for i in range(min(num_eval_envs, 9))]
+                grid_frame = _make_camera_grid(frame_list)
+                left_cam_grid_frames.append(grid_frame)
+
+            obs, rewards, dones, infos = eval_env.step(actions)
+            total_reward += rewards
+
+    mean_reward = total_reward.mean().item()
+    print(f"BC Eval mean reward: {mean_reward:.4f}")
+
+    # Save overhead debug camera video
+    video_dir = Path("eval_videos")
+    video_dir.mkdir(parents=True, exist_ok=True)
+    overhead_video_path = video_dir / f"{task}_{action_mode}_bc_eval.mp4"
+    eval_env.vis_cam.stop_recording(
+        save_to_filename=str(overhead_video_path),
+        fps=video_fps,
+    )
+    if overhead_video_path.exists():
+        print(f"BC overhead eval video saved to {overhead_video_path}")
+
+    # Save left camera grid video
+    left_cam_video_path = video_dir / f"{task}_{action_mode}_bc_left_cam.mp4"
+    if left_cam_grid_frames:
+        imageio.mimwrite(str(left_cam_video_path), left_cam_grid_frames, fps=video_fps)
+        print(f"BC left camera grid video saved to {left_cam_video_path}")
+
+    # Upload to wandb
+    if use_wandb:
+        try:
+            import wandb
+
+            if wandb.run is not None:
+                log_data = {"bc_eval/mean_reward": mean_reward}
+                if overhead_video_path.exists():
+                    log_data["bc_eval/overhead_video"] = wandb.Video(str(overhead_video_path), format="mp4")
+                if left_cam_video_path.exists():
+                    log_data["bc_eval/left_cam_video"] = wandb.Video(str(left_cam_video_path), format="mp4")
+                wandb.log(log_data)
+                print("BC eval videos and metrics uploaded to wandb.")
+            else:
+                print("wandb run not active, skipping upload.")
+        except ImportError:
+            print("wandb not installed, skipping upload.")
+
+
 def run_eval_and_log_video(
     task: str,
     action_mode: str,
@@ -204,8 +353,6 @@ def run_eval_and_log_video(
     Run evaluation after training, record video, upload to wandb.
     Creates a separate small env for eval to avoid interfering with training.
     """
-    import torch
-
     print("\n" + "=" * 60)
     print("Post-training evaluation")
     print("=" * 60)
@@ -409,7 +556,7 @@ def main():
     if args.stage == "bc":
         rl_log_dir = Path("logs") / f"{exp_name}_{args.action_mode}_rl"
         teacher_policy = load_teacher_policy(env, rl_train_cfg, rl_log_dir)
-        runner = BehaviorCloning(env, bc_train_cfg, teacher_policy, device=gs.device)
+        runner = BehaviorCloning(env, bc_train_cfg, teacher_policy, device=gs.device, use_wandb=use_wandb, wandb_project="so101-bc")
         runner.learn(num_learning_iterations=args.max_iterations, log_dir=str(log_dir))
     else:
         runner = OnPolicyRunner(env, copy.deepcopy(rl_train_cfg), str(log_dir), device=gs.device)
@@ -424,6 +571,15 @@ def main():
             action_mode=args.action_mode,
             log_dir=log_dir,
             rl_train_cfg=rl_train_cfg,
+            use_wandb=use_wandb,
+            env_overrides=env_overrides,
+        )
+    elif args.stage == "bc":
+        run_bc_eval_and_log_video(
+            task=args.task,
+            action_mode=args.action_mode,
+            log_dir=log_dir,
+            bc_train_cfg=bc_train_cfg,
             use_wandb=use_wandb,
             env_overrides=env_overrides,
         )
